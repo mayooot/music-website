@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: docker.m.daocloud.io/mysql:latest
+    container_name: mysql
+    restart: always
+    network_mode: host
+    environment:
+      MYSQL_ROOT_PASSWORD: admin1233
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - mysql-config:/etc/mysql/conf.d
+    command: --lower_case_table_names=1
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-padmin1233"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  redis:
+    image: docker.m.daocloud.io/redis:latest
+    container_name: redis
+    restart: always
+    network_mode: host
+    volumes:
+      - redis-config:/etc/redis/redis.conf
+      - redis-data:/data
+    command: redis-server /etc/redis/redis.conf --appendonly yes --requirepass admin1233
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "2"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "admin1233", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: docker.m.daocloud.io/minio/minio:latest
+    container_name: minio
+    restart: always
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin1233
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  mysql-data:
+  mysql-config:
+  redis-config:
+  redis-data:
+  minio-data:
+
+networks:
+  default:
+    name: music-network
