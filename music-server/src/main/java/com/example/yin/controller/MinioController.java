@@ -2,6 +2,7 @@ package com.example.yin.controller;
 
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
+import io.minio.StatObjectArgs;
 import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,8 +10,12 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 
+import javax.servlet.http.HttpServletRequest;
 import java.io.InputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 @Controller
@@ -19,26 +24,75 @@ public class MinioController {
     private String bucketName;
     @Autowired
     private MinioClient minioClient;
-    //获取歌曲
+    //获取歌曲 - 支持Range请求用于音频流媒体播放
     @GetMapping("/user01/{fileName:.+}")
-    public ResponseEntity<byte[]> getMusic(@PathVariable String fileName) {
+    public ResponseEntity<byte[]> getMusic(@PathVariable String fileName, 
+                                         @RequestHeader(value = "Range", required = false) String rangeHeader,
+                                         HttpServletRequest request) {
         try {
+            // 获取文件信息
+            StatObjectArgs statArgs = StatObjectArgs.builder()
+                    .bucket(bucketName)
+                    .object(fileName)
+                    .build();
+            io.minio.StatObjectResponse statObject = minioClient.statObject(statArgs);
+            long fileSize = statObject.size();
+            
+            // 设置响应头
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            headers.set("Accept-Ranges", "bytes");
+            headers.set("Cache-Control", "no-cache");
+            
+            // 处理Range请求
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+                // 解析Range头
+                Pattern pattern = Pattern.compile("bytes=(\\d+)-(\\d*)");
+                Matcher matcher = pattern.matcher(rangeHeader);
+                
+                if (matcher.find()) {
+                    long start = Long.parseLong(matcher.group(1));
+                    long end = matcher.group(2).isEmpty() ? fileSize - 1 : Long.parseLong(matcher.group(2));
+                    
+                    // 确保范围有效
+                    if (start < 0) start = 0;
+                    if (end >= fileSize) end = fileSize - 1;
+                    if (start > end) {
+                        return new ResponseEntity<>(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+                    }
+                    
+                    // 设置Range响应头
+                    headers.set("Content-Range", String.format("bytes %d-%d/%d", start, end, fileSize));
+                    headers.setContentLength(end - start + 1);
+                    
+                    // 获取指定范围的数据
+                    GetObjectArgs getArgs = GetObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(fileName)
+                            .offset(start)
+                            .length(end - start + 1)
+                            .build();
+                    
+                    InputStream inputStream = minioClient.getObject(getArgs);
+                    byte[] bytes = IOUtils.toByteArray(inputStream);
+                    inputStream.close();
+                    
+                    return new ResponseEntity<>(bytes, headers, HttpStatus.PARTIAL_CONTENT);
+                }
+            }
+            
+            // 没有Range请求，返回完整文件
             GetObjectArgs args = GetObjectArgs.builder()
                     .bucket(bucketName)
                     .object(fileName)
                     .build();
             InputStream inputStream = minioClient.getObject(args);
-
-            // 将文件内容读取为字节数组
             byte[] bytes = IOUtils.toByteArray(inputStream);
-
-            // 设置响应头，指示浏览器如何处理响应内容
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-            headers.setContentDispositionFormData("attachment", fileName); // 如果需要下载文件，可以使用此头部
-
-            // 返回字节数组作为响应
+            inputStream.close();
+            
+            headers.setContentLength(fileSize);
             return new ResponseEntity<>(bytes, headers, HttpStatus.OK);
+            
         } catch (Exception e) {
             e.printStackTrace();
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
