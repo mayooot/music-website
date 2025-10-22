@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   mysql:
-    image: docker.m.daocloud.io/mysql:latest
+    image: docker.1ms.run/library/mysql:latest
     container_name: mysql
     restart: always
     network_mode: host
